@@ -32,18 +32,35 @@ class LTADatamallClient:
 
     def get(self, endpoint: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         url = f"{self.base_url}/{endpoint.lstrip('/')}"
-        response = self.session.get(
-            url,
-            headers=self._headers(),
-            params=params or {},
-            timeout=self.timeout_s,
-        )
-        response.raise_for_status()
 
-        if not response.text.strip():
-            return {}
+        try:
+            print(f"[LTA] Calling URL: {url}")
+            print(f"[LTA] Params: {params or {}}")
 
-        return response.json()
+            response = self.session.get(
+                url,
+                headers=self._headers(),
+                params=params or {},
+                timeout=self.timeout_s,
+            )
+
+            print(f"[LTA] Status Code: {response.status_code}")
+            print(f"[LTA] Response Preview: {response.text[:300]}")
+
+            response.raise_for_status()
+
+            if not response.text.strip():
+                return {}
+
+            return response.json()
+
+        except requests.exceptions.RequestException as e:
+            print(f"[LTA] Request failed for endpoint '{endpoint}': {e}")
+            return {
+                "error": str(e),
+                "endpoint": endpoint,
+                "params": params or {},
+            }
 
     def get_paged(self, endpoint: str, page_size: int = 500) -> List[Dict[str, Any]]:
         all_rows: List[Dict[str, Any]] = []
@@ -52,8 +69,12 @@ class LTADatamallClient:
         while True:
             params = {"$skip": skip}
             payload = self.get(endpoint, params=params)
-            rows = payload.get("value", [])
 
+            if "error" in payload:
+                print(f"[LTA] Pagination stopped due to error: {payload['error']}")
+                break
+
+            rows = payload.get("value", [])
             if not rows:
                 break
 

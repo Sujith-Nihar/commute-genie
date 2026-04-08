@@ -13,17 +13,21 @@ class TTLCache:
 
     def get(self, key: str):
         import time
+
         item = self._store.get(key)
         if not item:
             return None
+
         value, expires_at = item
         if time.time() > expires_at:
             self._store.pop(key, None)
             return None
+
         return value
 
     def set(self, key: str, value: Any, ttl_s: int):
         import time
+
         self._store[key] = (value, time.time() + ttl_s)
 
 
@@ -33,6 +37,7 @@ cache = TTLCache()
 def _minutes_until(arrival_iso: Optional[str]) -> Optional[int]:
     if not arrival_iso:
         return None
+
     try:
         arrival_dt = datetime.fromisoformat(arrival_iso.replace("Z", "+00:00"))
         now = datetime.now(arrival_dt.tzinfo)
@@ -45,15 +50,7 @@ def _minutes_until(arrival_iso: Optional[str]) -> Optional[int]:
 def tool_bus_arrival(bus_stop_code: str, service_no: Optional[str] = None) -> Dict[str, Any]:
     if not lta_client:
         return {
-            "mock": True,
-            "bus_stop_code": bus_stop_code,
-            "service_no": service_no or "12",
-            "services": [
-                {
-                    "service_no": service_no or "12",
-                    "next_bus_mins": 4
-                }
-            ]
+            "error": "LTA client is not initialized. Check LTA_ACCOUNT_KEY in your environment."
         }
 
     params = {"BusStopCode": bus_stop_code}
@@ -61,58 +58,89 @@ def tool_bus_arrival(bus_stop_code: str, service_no: Optional[str] = None) -> Di
         params["ServiceNo"] = service_no
 
     raw = lta_client.get("v3/BusArrival", params=params)
-    services = []
 
+    if "error" in raw:
+        return {
+            "error": raw["error"],
+            "bus_stop_code": bus_stop_code,
+            "service_no": service_no,
+            "raw": raw,
+        }
+
+    services = []
     for svc in raw.get("Services", [])[:5]:
-        services.append({
-            "service_no": svc.get("ServiceNo"),
-            "next_bus_mins": _minutes_until(svc.get("NextBus", {}).get("EstimatedArrival")),
-            "next_bus_2_mins": _minutes_until(svc.get("NextBus2", {}).get("EstimatedArrival")),
-            "next_bus_3_mins": _minutes_until(svc.get("NextBus3", {}).get("EstimatedArrival")),
-        })
+        services.append(
+            {
+                "service_no": svc.get("ServiceNo"),
+                "operator": svc.get("Operator"),
+                "next_bus_mins": _minutes_until(
+                    svc.get("NextBus", {}).get("EstimatedArrival")
+                ),
+                "next_bus_2_mins": _minutes_until(
+                    svc.get("NextBus2", {}).get("EstimatedArrival")
+                ),
+                "next_bus_3_mins": _minutes_until(
+                    svc.get("NextBus3", {}).get("EstimatedArrival")
+                ),
+            }
+        )
 
     return {
         "mock": False,
         "bus_stop_code": bus_stop_code,
         "service_no": service_no,
         "services": services,
+        "raw_keys": list(raw.keys()),
     }
 
 
 def tool_bus_stops_search(query: str, max_results: int = 5) -> Dict[str, Any]:
     cached = cache.get("busstops_all")
+
     if cached is None:
-        if lta_client:
-            cached = lta_client.get_paged("BusStops")
-        else:
-            cached = []
+        if not lta_client:
+            return {
+                "error": "LTA client is not initialized. Check LTA_ACCOUNT_KEY in your environment."
+            }
+
+        cached = lta_client.get_paged("BusStops")
         cache.set("busstops_all", cached, ttl_s=6 * 3600)
 
     q = query.lower().strip()
+    q_words = [word for word in q.split() if word]
     hits: List[Dict[str, Any]] = []
 
     for row in cached:
-        text = f"{row.get('Description', '')} {row.get('RoadName', '')}".lower()
-        if q in text:
-            hits.append({
-                "BusStopCode": row.get("BusStopCode"),
-                "RoadName": row.get("RoadName"),
-                "Description": row.get("Description"),
-            })
+        description = row.get("Description", "")
+        road_name = row.get("RoadName", "")
+        text = f"{description} {road_name}".lower()
+
+        if q and q in text:
+            hits.append(
+                {
+                    "BusStopCode": row.get("BusStopCode"),
+                    "RoadName": road_name,
+                    "Description": description,
+                }
+            )
+            continue
+
+        if q_words and all(word in text for word in q_words):
+            hits.append(
+                {
+                    "BusStopCode": row.get("BusStopCode"),
+                    "RoadName": road_name,
+                    "Description": description,
+                }
+            )
+
         if len(hits) >= max_results:
             break
-
-    if not lta_client and not hits:
-        hits = [{
-            "BusStopCode": "83139",
-            "RoadName": "Orchard Rd",
-            "Description": "Lucky Plaza"
-        }]
 
     return {
         "query": query,
         "count": len(hits),
-        "results": hits
+        "results": hits,
     }
 
 
@@ -122,21 +150,20 @@ def tool_traffic_incidents() -> Dict[str, Any]:
         return cached
 
     if not lta_client:
-        result = {
-            "mock": True,
-            "count": 1,
-            "top_incidents": [{"Type": "Accident", "Message": "Simulated incident on PIE"}]
+        return {
+            "error": "LTA client is not initialized. Check LTA_ACCOUNT_KEY in your environment."
         }
-        cache.set("traffic_incidents", result, ttl_s=30)
-        return result
 
     raw = lta_client.get("TrafficIncidents")
-    rows = raw.get("value", [])
 
+    if "error" in raw:
+        return raw
+
+    rows = raw.get("value", [])
     result = {
         "mock": False,
         "count": len(rows),
-        "top_incidents": rows[:5]
+        "top_incidents": rows[:5],
     }
     cache.set("traffic_incidents", result, ttl_s=30)
     return result
@@ -148,18 +175,18 @@ def tool_train_alerts() -> Dict[str, Any]:
         return cached
 
     if not lta_client:
-        result = {
-            "mock": True,
-            "count": 1,
-            "alerts": [{"Status": "No major disruption", "Line": "EWL"}]
+        return {
+            "error": "LTA client is not initialized. Check LTA_ACCOUNT_KEY in your environment."
         }
-        cache.set("train_alerts", result, ttl_s=30)
-        return result
 
     raw = lta_client.get("TrainServiceAlerts")
+
+    if "error" in raw:
+        return raw
+
     result = {
         "mock": False,
-        "raw": raw
+        "raw": raw,
     }
     cache.set("train_alerts", result, ttl_s=30)
     return result
@@ -171,18 +198,20 @@ def tool_taxi_availability() -> Dict[str, Any]:
         return cached
 
     if not lta_client:
-        result = {
-            "mock": True,
-            "count": 2450
+        return {
+            "error": "LTA client is not initialized. Check LTA_ACCOUNT_KEY in your environment."
         }
-        cache.set("taxi_availability", result, ttl_s=30)
-        return result
 
     raw = lta_client.get("Taxi-Availability")
+
+    if "error" in raw:
+        return raw
+
     rows = raw.get("value", [])
     result = {
         "mock": False,
-        "count": len(rows)
+        "count": len(rows),
+        "top_taxis": rows[:5],
     }
     cache.set("taxi_availability", result, ttl_s=30)
     return result

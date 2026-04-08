@@ -7,7 +7,7 @@ load_dotenv()
 class Settings:
     GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY", "")
     MODEL_NAME: str = os.getenv("MODEL_NAME", "gemini-2.5-flash")
-    LTA_ACCOUNT_KEY: str = os.getenv("LTA_ACCOUNT_KEY", "")
+    LTA_ACCOUNT_KEY: str = os.getenv("LTA_ACCOUNT_KEY", "sPQ276i9T6ONYATeBnvIbw==")
     DEFAULT_COUNTRY: str = os.getenv("DEFAULT_COUNTRY", "Singapore")
 
 
