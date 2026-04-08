@@ -1,6 +1,6 @@
 from app.state import AgentState
 from app.tools.context_tools import (
-    get_mock_weather_context,
+    get_weather_context,
     get_sg_holiday_context,
     get_sg_time_context,
 )
@@ -10,7 +10,7 @@ def context_agent_node(state: AgentState) -> AgentState:
     result = {
         "time": get_sg_time_context(),
         "holiday": get_sg_holiday_context(),
-        "weather": get_mock_weather_context(),
+        "weather": get_weather_context(),
     }
 
     state["context_result"] = result
