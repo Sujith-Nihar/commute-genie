@@ -10,6 +10,24 @@ from app.config import settings
 SG_TZ = pytz.timezone("Asia/Singapore")
 SG_HOLIDAYS = holidays.Singapore()
 
+# Dummy current location for local development / demo
+# Lucky Plaza area, Orchard Road
+"""
+CURRENT_LOCATION = {
+    "name": "Lucky Plaza (dummy current location)",
+    "latitude": 1.3044,
+    "longitude": 103.8331,
+    "postal_code": "238863",
+    "source": "dummy",
+}
+"""
+CURRENT_LOCATION = {
+    "name": "Queensway Shopping Centre (dummy current location)",
+    "latitude": 1.2876,
+    "longitude": 103.8034,
+    "postal_code": "149053",
+    "source": "dummy",
+}
 
 def get_sg_time_context() -> Dict[str, Any]:
     now = datetime.now(SG_TZ)
@@ -88,3 +106,6 @@ def get_weather_context():
             "impact": "unknown",
             "note": str(e),
         }
+    
+def get_current_location_context() -> Dict[str, Any]:
+    return dict(CURRENT_LOCATION)
