@@ -11,13 +11,13 @@ def manager_router_node(state: AgentState) -> AgentState:
     use_transport = any(
         k in question for k in [
             "bus", "mrt", "train", "taxi", "traffic", "incident",
-            "accident", "eta", "arrival", "disruption", "stop code"
+            "accident", "eta", "arrival", "disruption", "stop code", "transportation"
         ]
     )
 
     use_context = any(
         k in question for k in [
-            "rush hour", "holiday", "public holiday", "weather", "today", "crowded"
+            "rush hour", "holiday", "public holiday", "weather", "today", "crowded", "transportation"
         ]
     )
 
