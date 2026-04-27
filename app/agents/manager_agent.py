@@ -41,11 +41,14 @@ def manager_router_node(state: AgentState) -> AgentState:
     raw = response.content if isinstance(response.content, str) else str(response.content)
     plan = _extract_router_json(raw)
 
-    # Normalise: ensure required keys always exist
+    # Normalise: ensure required keys always exist.
+    # Use `or []` (not a default argument) so that an explicit JSON null from
+    # the LLM does not reach list() as None and raise TypeError.
+    raw_needs = plan.get("context_needs") or []
     normalised_plan = {
         "use_transport": bool(plan.get("use_transport", False)),
         "use_context": bool(plan.get("use_context", False)),
-        "context_needs": list(plan.get("context_needs", [])),
+        "context_needs": [s.lower() for s in raw_needs if isinstance(s, str)],
         "intent_summary": plan.get("intent_summary", ""),
         "router_raw": raw,
     }
@@ -59,6 +62,17 @@ def manager_router_node(state: AgentState) -> AgentState:
 def manager_writer_node(state: AgentState) -> AgentState:
     llm = get_llm()
 
+    transport_section = (
+        str(state["transport_result"])
+        if state.get("transport_result") is not None
+        else "Not collected (transport agent was not invoked for this query)."
+    )
+    context_section = (
+        str(state["context_result"])
+        if state.get("context_result") is not None
+        else "Not collected (context agent was not invoked for this query)."
+    )
+
     messages = [
         SystemMessage(content=MANAGER_SYSTEM_PROMPT),
         HumanMessage(
@@ -67,10 +81,10 @@ User Question:
 {state["question"]}
 
 Transport Agent Output:
-{state.get("transport_result")}
+{transport_section}
 
 Context Agent Output:
-{state.get("context_result")}
+{context_section}
 
 Write a grounded answer for a Singapore commuter.
 Use only the provided data.

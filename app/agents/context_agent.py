@@ -12,8 +12,11 @@ _ALL_CONTEXT_TYPES = {"time", "weather", "holiday"}
 def context_agent_node(state: AgentState) -> AgentState:
     plan = state.get("manager_plan", {})
 
-    # Honour the router's selective list; fall back to all if the key is missing
-    requested: set = set(plan.get("context_needs", _ALL_CONTEXT_TYPES))
+    # Use `or None` so an explicit JSON null falls through to the default.
+    # Values are already lowercased by manager_router_node; the intersection
+    # still guards against any stray unknown strings.
+    raw_needs = plan.get("context_needs") or None
+    requested: set = set(raw_needs) if raw_needs is not None else set(_ALL_CONTEXT_TYPES)
 
     # Guard against unknown values coming from the LLM
     requested = requested & _ALL_CONTEXT_TYPES

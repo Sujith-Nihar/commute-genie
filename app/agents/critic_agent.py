@@ -27,6 +27,17 @@ def _extract_json(text: str) -> dict:
 def critic_agent_node(state: AgentState) -> AgentState:
     llm = get_llm()
 
+    transport_section = (
+        str(state["transport_result"])
+        if state.get("transport_result") is not None
+        else "Not collected (transport agent was not invoked for this query)."
+    )
+    context_section = (
+        str(state["context_result"])
+        if state.get("context_result") is not None
+        else "Not collected (context agent was not invoked for this query)."
+    )
+
     messages = [
         SystemMessage(content=CRITIC_SYSTEM_PROMPT),
         HumanMessage(
@@ -38,10 +49,10 @@ Draft Answer:
 {state.get("draft_answer")}
 
 Transport Agent Output:
-{state.get("transport_result")}
+{transport_section}
 
 Context Agent Output:
-{state.get("context_result")}
+{context_section}
 """
         ),
     ]
