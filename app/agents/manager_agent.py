@@ -22,6 +22,7 @@ def _extract_router_json(text: str) -> dict:
 
     # Safe fallback: call both agents so no query goes unanswered
     return {
+        "use_trip_planner": False,
         "use_transport": True,
         "use_context": True,
         "context_needs": ["time", "weather", "holiday"],
@@ -46,6 +47,7 @@ def manager_router_node(state: AgentState) -> AgentState:
     # the LLM does not reach list() as None and raise TypeError.
     raw_needs = plan.get("context_needs") or []
     normalised_plan = {
+        "use_trip_planner": bool(plan.get("use_trip_planner", False)),
         "use_transport": bool(plan.get("use_transport", False)),
         "use_context": bool(plan.get("use_context", False)),
         "context_needs": [s.lower() for s in raw_needs if isinstance(s, str)],
@@ -60,6 +62,14 @@ def manager_router_node(state: AgentState) -> AgentState:
 
 
 def manager_writer_node(state: AgentState) -> AgentState:
+    # If the trip planner already wrote a structured draft, promote it directly.
+    # The trip_planner_node calls its own LLM writer with richer structured data;
+    # calling the generic manager writer on top would only degrade quality.
+    if state.get("trip_result") is not None and state.get("draft_answer"):
+        state.setdefault("used_agents", []).append("manager_writer")
+        state.setdefault("trace", {})["manager_draft"] = state["draft_answer"]
+        return state
+
     llm = get_llm()
 
     transport_section = (
