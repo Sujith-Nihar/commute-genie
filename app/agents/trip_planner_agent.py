@@ -17,12 +17,14 @@ from typing import Any, Dict
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from app.prompts import TRIP_PLANNER_WRITER_PROMPT
+from app.prompts import TRIP_PLANNER_WRITER_PROMPT, TRIP_PLANNER_FALLBACK_PROMPT
 from app.services.llm_service import get_llm
 from app.state import AgentState
 from app.tools.route_tools import (
     geocode_location,
     get_route_options,
+    classify_route_error,
+    build_fallback_suggestion,
     decide_realtime_needs,
     fetch_realtime_context,
     score_routes,
@@ -108,6 +110,28 @@ Trip Planning Result:
     return response.content if isinstance(response.content, str) else str(response.content)
 
 
+def _write_trip_fallback(question: str, fallback_result: Dict[str, Any]) -> str:
+    """Write a helpful response when the Directions API is unavailable."""
+    llm = get_llm()
+    response = llm.invoke([
+        SystemMessage(content=TRIP_PLANNER_FALLBACK_PROMPT),
+        HumanMessage(content=f"""
+User Question:
+{question}
+
+Origin: {fallback_result.get('origin', {}).get('resolved', 'unknown')}
+Destination: {fallback_result.get('destination', {}).get('resolved', 'unknown')}
+
+General Guidance:
+{json.dumps(fallback_result.get('general_guidance', {}), indent=2)}
+
+Real-time Conditions Fetched:
+{json.dumps(fallback_result.get('realtime', {}), indent=2, default=str)}
+"""),
+    ])
+    return response.content if isinstance(response.content, str) else str(response.content)
+
+
 # ---------------------------------------------------------------------------
 # Main node
 # ---------------------------------------------------------------------------
@@ -183,27 +207,93 @@ def trip_planner_node(state: AgentState) -> AgentState:
         modes=["driving", "transit"],
     )
 
-    valid_modes = [m for m, d in route_results.items() if "error" not in d]
-    print(f"[TripPlanner] Valid route modes: {valid_modes}")
+    error_class, error_detail = classify_route_error(route_results)
+    valid_modes = [
+        m for m, d in route_results.items()
+        if isinstance(d, dict) and "error" not in d
+    ]
+    print(f"[TripPlanner] Route error class: {error_class}  Valid modes: {valid_modes}")
 
-    if not valid_modes:
+    # ---- API-level failure (key missing / billing / not enabled) ----------
+    if error_class == "api_denied":
+        print(f"[TripPlanner] Directions API denied — using fallback path")
+        # Still fetch LTA real-time signals so we can give useful current info
+        fallback_needs = {
+            "traffic": False,
+            "train_alerts": True,
+            "bus_stops": True,
+            "bus_arrivals": False,
+            "taxi": True,
+            "weather": False,
+            "time": True,
+        }
+        realtime = fetch_realtime_context(fallback_needs, origin_coords=origin_geo)
+        print(f"[TripPlanner] Fallback realtime signals: {list(realtime.keys())}")
+
+        trip_result = build_fallback_suggestion(
+            origin_query=origin_query,
+            destination_query=dest_query,
+            realtime=realtime,
+            api_error_detail=error_detail,
+        )
+        trip_result["origin"] = {
+            "query": origin_query,
+            "resolved": origin_geo.get("name", origin_query),
+            "matched": True,
+        }
+        trip_result["destination"] = {
+            "query": dest_query,
+            "resolved": dest_geo.get("name", dest_query),
+            "matched": True,
+        }
+        draft = _write_trip_fallback(question, trip_result)
+
+        state["trip_result"] = trip_result
+        state["draft_answer"] = draft
+        state.setdefault("used_agents", []).append("trip_planner")
+        state.setdefault("trace", {})["trip_planner"] = {
+            "origin": trip_result["origin"],
+            "destination": trip_result["destination"],
+            "error_class": error_class,
+            "api_error": error_detail,
+            "realtime_fetched": list(realtime.keys()),
+            "fallback": True,
+        }
+        return state
+
+    # ---- No route found (ZERO_RESULTS / NOT_FOUND) ----------------------
+    if error_class in ("no_route", "all_failed"):
         trip_result = {
-            "error": "Google Directions returned no valid routes for this trip.",
-            "origin": origin_geo,
-            "destination": dest_geo,
-            "route_results": route_results,
+            "error": error_detail,
+            "error_class": error_class,
+            "origin": {
+                "query": origin_query,
+                "resolved": origin_geo.get("name", origin_query),
+                "matched": True,
+            },
+            "destination": {
+                "query": dest_query,
+                "resolved": dest_geo.get("name", dest_query),
+                "matched": True,
+            },
+            "route_results": {
+                m: d.get("api_status", d.get("error", "unknown"))
+                for m, d in route_results.items()
+            },
         }
         state["trip_result"] = trip_result
         state["draft_answer"] = (
-            f"No route was found from '{origin_query}' to '{dest_query}'. "
-            "This may be because the locations are the same, or the Directions API "
-            "could not compute a route. Please check the addresses and try again."
+            f"No route could be found from '{origin_geo.get('name', origin_query)}' "
+            f"to '{dest_geo.get('name', dest_query)}'. "
+            f"Both locations were found on the map, but the Directions API returned "
+            f"no result for the requested travel modes. "
+            f"Please verify the addresses are in Singapore and try rephrasing."
         )
         state.setdefault("used_agents", []).append("trip_planner")
         state.setdefault("trace", {})["trip_planner"] = trip_result
         return state
 
-    # ---- 4. Decide which real-time signals to fetch ----------------------
+    # ---- 4. At least one valid mode — normal path -------------------------
     needs = decide_realtime_needs(route_results)
     print(f"[TripPlanner] Real-time needs: {needs}")
 

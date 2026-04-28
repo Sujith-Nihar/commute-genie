@@ -90,7 +90,17 @@ class GoogleMapsClient:
             departure_now: Pass departure_time=now for transit/driving.
         """
         if not self.is_configured():
-            raise RuntimeError("GOOGLE_MAPS_API_KEY is missing.")
+            # Return structured api_denied errors for every requested mode so
+            # callers receive a consistent dict rather than a raised exception.
+            missing_results: Dict[str, Any] = {}
+            for m in (modes or ["driving", "transit"]):
+                missing_results[m] = {
+                    "error": "GOOGLE_MAPS_API_KEY is not set. Add it to your .env file.",
+                    "error_type": "api_key_missing",
+                    "api_status": "REQUEST_DENIED",
+                    "mode": m,
+                }
+            return missing_results
 
         modes = modes or ["driving", "transit"]
         results: Dict[str, Any] = {}
@@ -120,10 +130,45 @@ class GoogleMapsClient:
                 data = resp.json()
 
                 status = data.get("status", "UNKNOWN")
-                print(f"[Maps] Directions {mode} status: {status}")
+                api_message = data.get("error_message", "")
+                print(f"[Maps] Directions {mode} status: {status}"
+                      + (f" — {api_message}" if api_message else ""))
 
                 if status != "OK":
-                    results[mode] = {"error": status, "mode": mode}
+                    # Classify error so callers can distinguish API-level
+                    # problems (key/billing) from query-level problems (no route).
+                    if status == "REQUEST_DENIED":
+                        error_type = "api_denied"
+                        error_detail = (
+                            f"Directions API request denied. "
+                            f"Check that the Directions API is enabled for your "
+                            f"GOOGLE_MAPS_API_KEY and that billing is active. "
+                            f"API message: {api_message or 'none'}"
+                        )
+                    elif status == "ZERO_RESULTS":
+                        error_type = "no_route"
+                        error_detail = (
+                            f"No route found between the given locations for mode={mode}."
+                        )
+                    elif status == "NOT_FOUND":
+                        error_type = "location_not_found"
+                        error_detail = f"One or both locations could not be geocoded by Directions API."
+                    elif status == "OVER_DAILY_LIMIT" or status == "OVER_QUERY_LIMIT":
+                        error_type = "quota_exceeded"
+                        error_detail = f"Google Maps API quota exceeded. Try again later."
+                    else:
+                        error_type = "api_error"
+                        error_detail = (
+                            f"Directions API returned status={status}. "
+                            f"{api_message or ''}"
+                        )
+
+                    results[mode] = {
+                        "error": error_detail,
+                        "error_type": error_type,
+                        "api_status": status,
+                        "mode": mode,
+                    }
                     continue
 
                 route = data["routes"][0]

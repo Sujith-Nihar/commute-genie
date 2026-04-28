@@ -4,12 +4,14 @@ route_tools.py — Trip-planning helper functions for CommuteGenie.
 Responsibilities:
 - Geocode origin / destination using the existing Google Places client.
 - Fetch route options for all relevant modes via the Directions API.
+- Classify Directions API errors (api_denied vs no_route vs other).
 - Decide which real-time LTA / weather signals are needed (conditional).
 - Collect only the relevant signals.
 - Score routes and return a ranked recommendation payload.
+- Build a knowledge-based fallback when the Directions API is unavailable.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from app.tools.google_maps_client import google_maps_client
 from app.tools.transit_tools import (
@@ -20,6 +22,12 @@ from app.tools.transit_tools import (
     tool_taxi_availability,
 )
 from app.tools.context_tools import get_weather_context, get_sg_time_context
+
+# ---------------------------------------------------------------------------
+# Error type constants (produced by google_maps_client.get_directions)
+# ---------------------------------------------------------------------------
+_API_LEVEL_ERRORS = {"api_denied", "api_key_missing", "quota_exceeded"}
+_NO_ROUTE_ERRORS = {"no_route", "location_not_found"}
 
 
 # ---------------------------------------------------------------------------
@@ -84,6 +92,103 @@ def get_route_options(
         )
     except Exception as exc:
         return {"error": str(exc)}
+
+
+# ---------------------------------------------------------------------------
+# 2b. Classify route_results errors
+# ---------------------------------------------------------------------------
+
+def classify_route_error(route_results: Dict[str, Any]) -> Tuple[str, str]:
+    """
+    Inspect route_results for errors and return (error_class, human_message).
+
+    error_class is one of:
+      "ok"          — at least one mode has no error
+      "api_denied"  — key missing, billing off, or API not enabled
+      "no_route"    — API is working but found no route (wrong locations, same point)
+      "api_error"   — other API-level error
+      "all_failed"  — every mode failed but with mixed or unknown error types
+    """
+    if not route_results:
+        return "all_failed", "No route results were returned."
+
+    # If the top-level has an error key (client raised before looping modes)
+    if "error" in route_results and not any(
+        isinstance(v, dict) and "mode" in v for v in route_results.values()
+    ):
+        return "api_error", str(route_results["error"])
+
+    all_error_types = set()
+    has_valid = False
+
+    for mode, data in route_results.items():
+        if not isinstance(data, dict):
+            continue
+        if "error" not in data:
+            has_valid = True
+        else:
+            all_error_types.add(data.get("error_type", "api_error"))
+
+    if has_valid:
+        return "ok", ""
+
+    if all_error_types & _API_LEVEL_ERRORS:
+        sample_msg = next(
+            (d.get("error", "") for d in route_results.values()
+             if isinstance(d, dict) and d.get("error_type") in _API_LEVEL_ERRORS),
+            "Directions API request denied."
+        )
+        return "api_denied", sample_msg
+
+    if all_error_types <= _NO_ROUTE_ERRORS:
+        return "no_route", (
+            "No route was found between these locations. They may be the same "
+            "point, unreachable by the requested mode, or the address was not recognised."
+        )
+
+    return "all_failed", "All direction requests failed with mixed errors."
+
+
+def build_fallback_suggestion(
+    origin_query: str,
+    destination_query: str,
+    realtime: Dict[str, Any],
+    api_error_detail: str,
+) -> Dict[str, Any]:
+    """
+    Produce a knowledge-based fallback response when the Directions API is
+    unavailable (REQUEST_DENIED / key missing / quota exceeded).
+
+    Returns a dict that trip_planner_agent can store in trip_result and pass
+    to the LLM writer.  The LLM will explain the situation and still offer
+    useful general guidance based on time context and LTA signals.
+    """
+    print("[Route] Building knowledge-based fallback (Directions API unavailable)")
+    return {
+        "fallback": True,
+        "api_error": api_error_detail,
+        "origin_query": origin_query,
+        "destination_query": destination_query,
+        "realtime": realtime,
+        "general_guidance": {
+            "mrt": (
+                "Singapore MRT covers most urban destinations. "
+                "Use the NSL (North-South Line) for Orchard ↔ City Hall ↔ Marina Bay corridor. "
+                "Use the DTL (Downtown Line) and CCL (Circle Line) for cross-island trips. "
+                "Check train alerts below for current service status."
+            ),
+            "taxi_grab": (
+                "Grab and taxis are widely available across Singapore. "
+                "Typical fares: S$10–20 for short urban trips, S$20–40 for airport runs. "
+                "Surcharges apply during peak hours (7–9 AM, 5–8 PM) and late night."
+            ),
+            "bus": (
+                "SBS Transit and SMRT buses cover most neighbourhoods. "
+                "Check nearest bus stop arrivals using the LTA DataMall data. "
+                "Bus journey times vary significantly by traffic."
+            ),
+        },
+    }
 
 
 # ---------------------------------------------------------------------------
