@@ -1,3 +1,4 @@
+import re
 import requests
 from typing import Any, Dict, List, Optional
 
@@ -132,9 +133,7 @@ class GoogleMapsClient:
                 for step in leg.get("steps", []):
                     travel_mode = step.get("travel_mode", mode).lower()
                     instruction = step.get("html_instructions", "")
-                    # Strip HTML tags
-                    import re as _re
-                    instruction = _re.sub(r"<[^>]+>", " ", instruction).strip()
+                    instruction = re.sub(r"<[^>]+>", " ", instruction).strip()
                     duration_s = step.get("duration", {}).get("value", 0)
                     distance_m = step.get("distance", {}).get("value", 0)
 

@@ -27,16 +27,29 @@ def _extract_json(text: str) -> dict:
 def critic_agent_node(state: AgentState) -> AgentState:
     llm = get_llm()
 
-    transport_section = (
-        str(state["transport_result"])
-        if state.get("transport_result") is not None
-        else "Not collected (transport agent was not invoked for this query)."
-    )
-    context_section = (
-        str(state["context_result"])
-        if state.get("context_result") is not None
-        else "Not collected (context agent was not invoked for this query)."
-    )
+    # Build the reference data section the critic uses to verify the draft.
+    # For trip-planning queries the reference is the structured trip_result;
+    # for general transport queries it is the raw transport/context outputs.
+    trip_result = state.get("trip_result")
+    if trip_result is not None:
+        reference_section = (
+            f"Trip Planner Result:\n{json.dumps(trip_result, indent=2, default=str)}"
+        )
+    else:
+        transport_section = (
+            str(state["transport_result"])
+            if state.get("transport_result") is not None
+            else "Not collected (transport agent was not invoked for this query)."
+        )
+        context_section = (
+            str(state["context_result"])
+            if state.get("context_result") is not None
+            else "Not collected (context agent was not invoked for this query)."
+        )
+        reference_section = (
+            f"Transport Agent Output:\n{transport_section}\n\n"
+            f"Context Agent Output:\n{context_section}"
+        )
 
     messages = [
         SystemMessage(content=CRITIC_SYSTEM_PROMPT),
@@ -48,11 +61,7 @@ User Question:
 Draft Answer:
 {state.get("draft_answer")}
 
-Transport Agent Output:
-{transport_section}
-
-Context Agent Output:
-{context_section}
+{reference_section}
 """
         ),
     ]
