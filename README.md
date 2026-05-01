@@ -462,3 +462,4 @@ CommuteGenie Singapore is a modular multi-agent transportation assistant built w
 - **Streamlit** — lightweight demo frontend
 
 It uses a manager–worker–critic architecture to combine real-time transport data, contextual signals, and LLM reasoning into concise, grounded commuter answers.
+# informs-uic-hackathon
